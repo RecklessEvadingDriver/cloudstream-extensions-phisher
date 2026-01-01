@@ -1,321 +1,415 @@
 #!/usr/bin/env python3
 """
-Viking File Handler - Python implementation based on Kotlin OXXFile data classes
+Viking File Handler - Python script to extract download links from viking file URLs
 
-This script provides Python data models and utilities for handling viking file links
-and their metadata, mirroring the Kotlin implementation in StreamPlayParser.kt.
+This script fetches viking file pages and extracts all available download links,
+mirroring the Kotlin extractor pattern used in StreamPlay.
+
+Usage:
+    python3 viking_file_handler.py https://vik1ngfile.site/f/oDAbw3OOmy
+    python3 viking_file_handler.py https://vik1ngfile.site/f/oDAbw3OOmy --json
+    python3 viking_file_handler.py https://vik1ngfile.site/f/oDAbw3OOmy --output links.json
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
-from datetime import datetime
+from typing import List, Optional, Dict, Any
 import json
+import re
+import sys
+import argparse
+
+try:
+    import requests
+    from bs4 import BeautifulSoup
+except ImportError:
+    print("Required packages not found. Install with:")
+    print("  pip install requests beautifulsoup4")
+    sys.exit(1)
 
 
 @dataclass
-class DriveLink:
-    """Represents a Google Drive link with associated metadata."""
+class DownloadLink:
+    """Represents a download link with metadata."""
+    url: str
+    quality: Optional[str] = None
+    source: str = "viking"
+    file_size: Optional[str] = None
+    file_type: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            'url': self.url,
+            'quality': self.quality,
+            'source': self.source,
+            'file_size': self.file_size,
+            'file_type': self.file_type
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'DownloadLink':
+        """Create DownloadLink from dictionary."""
+        return cls(
+            url=data.get('url', ''),
+            quality=data.get('quality'),
+            source=data.get('source', 'viking'),
+            file_size=data.get('file_size'),
+            file_type=data.get('file_type')
+        )
+
+
+@dataclass
+class VikingFileInfo:
+    """Information about a viking file."""
     file_id: str
-    web_view_link: str
-    drive_label: str
-    credential_index: int
-    is_login_drive: bool
-    is_drive2: bool
+    file_name: Optional[str] = None
+    file_size: Optional[str] = None
+    upload_date: Optional[str] = None
+    download_links: List[DownloadLink] = field(default_factory=list)
+    page_url: str = ""
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
-            'fileId': self.file_id,
-            'webViewLink': self.web_view_link,
-            'driveLabel': self.drive_label,
-            'credentialIndex': self.credential_index,
-            'isLoginDrive': self.is_login_drive,
-            'isDrive2': self.is_drive2
+            'file_id': self.file_id,
+            'file_name': self.file_name,
+            'file_size': self.file_size,
+            'upload_date': self.upload_date,
+            'download_links': [link.to_dict() for link in self.download_links],
+            'page_url': self.page_url
         }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'DriveLink':
-        """Create DriveLink from dictionary."""
-        return cls(
-            file_id=data.get('fileId', ''),
-            web_view_link=data.get('webViewLink', ''),
-            drive_label=data.get('driveLabel', ''),
-            credential_index=data.get('credentialIndex', 0),
-            is_login_drive=data.get('isLoginDrive', False),
-            is_drive2=data.get('isDrive2', False)
-        )
-
-
-@dataclass
-class Metadata:
-    """File metadata including conversion status for various services."""
-    mime_type: str
-    file_extension: str
-    modified_time: str
-    created_time: str
-    pixeldrain_conversion_failed: bool
-    pixeldrain_conversion_failed_at: str
-    pixeldrain_conversion_error: str
-    viking_conversion_failed: bool
-    viking_conversion_failed_at: str
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            'mimeType': self.mime_type,
-            'fileExtension': self.file_extension,
-            'modifiedTime': self.modified_time,
-            'createdTime': self.created_time,
-            'pixeldrainConversionFailed': self.pixeldrain_conversion_failed,
-            'pixeldrainConversionFailedAt': self.pixeldrain_conversion_failed_at,
-            'pixeldrainConversionError': self.pixeldrain_conversion_error,
-            'vikingConversionFailed': self.viking_conversion_failed,
-            'vikingConversionFailedAt': self.viking_conversion_failed_at
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'Metadata':
-        """Create Metadata from dictionary."""
-        return cls(
-            mime_type=data.get('mimeType', ''),
-            file_extension=data.get('fileExtension', ''),
-            modified_time=data.get('modifiedTime', ''),
-            created_time=data.get('createdTime', ''),
-            pixeldrain_conversion_failed=data.get('pixeldrainConversionFailed', False),
-            pixeldrain_conversion_failed_at=data.get('pixeldrainConversionFailedAt', ''),
-            pixeldrain_conversion_error=data.get('pixeldrainConversionError', ''),
-            viking_conversion_failed=data.get('vikingConversionFailed', False),
-            viking_conversion_failed_at=data.get('vikingConversionFailedAt', '')
-        )
-
-
-@dataclass
-class OxxFile:
-    """
-    OXXFile data model representing a file with multiple hosting service links.
-    
-    Includes links to various file hosting services such as:
-    - Viking
-    - Pixeldrain
-    - Gdtot
-    - Hubcloud
-    - Filepress
-    - Google Drive (multiple)
-    """
-    id: str
-    code: str
-    file_name: str
-    size: int
-    drive_links: List[DriveLink]
-    metadata: Metadata
-    created_at: str
-    views: int
-    status: str
-    gdtot_link: Optional[str] = None
-    gdtot_name: Optional[str] = None
-    hubcloud_link: str = ""
-    filepress_link: str = ""
-    viking_link: Optional[str] = None
-    pixeldrain_link: Optional[str] = None
-    credential_index: int = 0
-    duration: Optional[str] = None
-    user_name: str = ""
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            'id': self.id,
-            'code': self.code,
-            'fileName': self.file_name,
-            'size': self.size,
-            'driveLinks': [link.to_dict() for link in self.drive_links],
-            'metadata': self.metadata.to_dict(),
-            'createdAt': self.created_at,
-            'views': self.views,
-            'status': self.status,
-            'gdtotLink': self.gdtot_link,
-            'gdtotName': self.gdtot_name,
-            'hubcloudLink': self.hubcloud_link,
-            'filepressLink': self.filepress_link,
-            'vikingLink': self.viking_link,
-            'pixeldrainLink': self.pixeldrain_link,
-            'credential_index': self.credential_index,
-            'duration': self.duration,
-            'userName': self.user_name
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'OxxFile':
-        """Create OxxFile from dictionary."""
-        drive_links = [DriveLink.from_dict(link) for link in data.get('driveLinks', [])]
-        metadata = Metadata.from_dict(data.get('metadata', {}))
-        
-        return cls(
-            id=data.get('id', ''),
-            code=data.get('code', ''),
-            file_name=data.get('fileName', ''),
-            size=data.get('size', 0),
-            drive_links=drive_links,
-            metadata=metadata,
-            created_at=data.get('createdAt', ''),
-            views=data.get('views', 0),
-            status=data.get('status', ''),
-            gdtot_link=data.get('gdtotLink'),
-            gdtot_name=data.get('gdtotName'),
-            hubcloud_link=data.get('hubcloudLink', ''),
-            filepress_link=data.get('filepressLink', ''),
-            viking_link=data.get('vikingLink'),
-            pixeldrain_link=data.get('pixeldrainLink'),
-            credential_index=data.get('credential_index', 0),
-            duration=data.get('duration'),
-            user_name=data.get('userName', '')
-        )
 
     def to_json(self, indent: int = 2) -> str:
         """Convert to JSON string."""
         return json.dumps(self.to_dict(), indent=indent)
 
     @classmethod
-    def from_json(cls, json_str: str) -> 'OxxFile':
-        """Create OxxFile from JSON string."""
-        data = json.loads(json_str)
-        return cls.from_dict(data)
-
-    def has_viking_link(self) -> bool:
-        """Check if the file has a viking link."""
-        return self.viking_link is not None and len(self.viking_link) > 0
-
-    def is_viking_conversion_failed(self) -> bool:
-        """Check if viking conversion has failed."""
-        return self.metadata.viking_conversion_failed
-
-    def get_all_links(self) -> dict:
-        """Get all available file hosting links."""
-        links = {}
-        
-        if self.viking_link:
-            links['viking'] = self.viking_link
-        if self.pixeldrain_link:
-            links['pixeldrain'] = self.pixeldrain_link
-        if self.gdtot_link:
-            links['gdtot'] = self.gdtot_link
-        if self.hubcloud_link:
-            links['hubcloud'] = self.hubcloud_link
-        if self.filepress_link:
-            links['filepress'] = self.filepress_link
-        
-        # Add drive links
-        for i, drive_link in enumerate(self.drive_links):
-            links[f'drive_{i+1}'] = drive_link.web_view_link
-        
-        return links
-
-    def get_viking_info(self) -> dict:
-        """Get viking-specific information."""
-        return {
-            'viking_link': self.viking_link,
-            'viking_conversion_failed': self.metadata.viking_conversion_failed,
-            'viking_conversion_failed_at': self.metadata.viking_conversion_failed_at,
-            'has_viking_link': self.has_viking_link()
-        }
+    def from_dict(cls, data: dict) -> 'VikingFileInfo':
+        """Create VikingFileInfo from dictionary."""
+        download_links = [DownloadLink.from_dict(link) for link in data.get('download_links', [])]
+        return cls(
+            file_id=data.get('file_id', ''),
+            file_name=data.get('file_name'),
+            file_size=data.get('file_size'),
+            upload_date=data.get('upload_date'),
+            download_links=download_links,
+            page_url=data.get('page_url', '')
+        )
 
 
-class VikingFileHandler:
-    """Handler class for working with viking files."""
+class VikingFileExtractor:
+    """Extractor for viking file URLs to get all available download links."""
     
-    @staticmethod
-    def parse_file(file_path: str) -> OxxFile:
-        """Parse a JSON file containing OxxFile data."""
-        with open(file_path, 'r', encoding='utf-8') as f:
-            json_str = f.read()
-        return OxxFile.from_json(json_str)
-
-    @staticmethod
-    def save_file(oxx_file: OxxFile, file_path: str) -> None:
-        """Save OxxFile to a JSON file."""
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(oxx_file.to_json())
-
-    @staticmethod
-    def filter_by_viking_link(files: List[OxxFile]) -> List[OxxFile]:
-        """Filter files that have viking links."""
-        return [f for f in files if f.has_viking_link()]
-
-    @staticmethod
-    def filter_by_viking_conversion_failed(files: List[OxxFile]) -> List[OxxFile]:
-        """Filter files where viking conversion has failed."""
-        return [f for f in files if f.is_viking_conversion_failed()]
-
-    @staticmethod
-    def get_viking_statistics(files: List[OxxFile]) -> dict:
-        """Get statistics about viking links in a list of files."""
-        total_files = len(files)
-        files_with_viking = len([f for f in files if f.has_viking_link()])
-        failed_conversions = len([f for f in files if f.is_viking_conversion_failed()])
+    BASE_URL = "https://vik1ngfile.site"
+    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    
+    def __init__(self, timeout: int = 30):
+        """Initialize the extractor with optional timeout."""
+        self.timeout = timeout
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': self.USER_AGENT,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        })
+    
+    def extract_file_id(self, url: str) -> Optional[str]:
+        """Extract file ID from viking URL."""
+        patterns = [
+            r'vik1ngfile\.site/f/([a-zA-Z0-9]+)',
+            r'vik1ngfile\.site/file/([a-zA-Z0-9]+)',
+            r'/f/([a-zA-Z0-9]+)',
+            r'/file/([a-zA-Z0-9]+)'
+        ]
         
-        return {
-            'total_files': total_files,
-            'files_with_viking_link': files_with_viking,
-            'viking_conversion_failures': failed_conversions,
-            'success_rate': (files_with_viking - failed_conversions) / files_with_viking * 100 
-                           if files_with_viking > 0 else 0
-        }
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        return None
+    
+    def get_download_links(self, url: str) -> VikingFileInfo:
+        """
+        Extract all download links from a viking file URL.
+        
+        Args:
+            url: Viking file URL (e.g., https://vik1ngfile.site/f/oDAbw3OOmy)
+            
+        Returns:
+            VikingFileInfo object containing all extracted information
+        """
+        file_id = self.extract_file_id(url)
+        if not file_id:
+            raise ValueError(f"Could not extract file ID from URL: {url}")
+        
+        # Normalize URL
+        if not url.startswith('http'):
+            url = f"{self.BASE_URL}/f/{file_id}"
+        
+        viking_info = VikingFileInfo(
+            file_id=file_id,
+            page_url=url
+        )
+        
+        try:
+            # Fetch the page
+            response = self.session.get(url, timeout=self.timeout)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Extract file information
+            viking_info.file_name = self._extract_file_name(soup)
+            viking_info.file_size = self._extract_file_size(soup)
+            viking_info.upload_date = self._extract_upload_date(soup)
+            
+            # Extract all download links
+            viking_info.download_links = self._extract_download_links(soup, url)
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching viking file page: {e}", file=sys.stderr)
+            # Return info with what we have
+        
+        return viking_info
+    
+    def _extract_file_name(self, soup: BeautifulSoup) -> Optional[str]:
+        """Extract file name from the page."""
+        # Try various selectors
+        selectors = [
+            ('h1', {'class': 'file-name'}),
+            ('h2', {'class': 'file-name'}),
+            ('div', {'class': 'file-name'}),
+            ('span', {'class': 'file-name'}),
+            ('h1', {}),
+            ('title', {})
+        ]
+        
+        for tag, attrs in selectors:
+            element = soup.find(tag, attrs)
+            if element:
+                text = element.get_text(strip=True)
+                if text and len(text) > 0:
+                    return text
+        
+        return None
+    
+    def _extract_file_size(self, soup: BeautifulSoup) -> Optional[str]:
+        """Extract file size from the page."""
+        # Try to find file size
+        size_patterns = [
+            (r'Size[:\s]+([0-9.]+\s*[KMGT]B)', re.IGNORECASE),
+            (r'File\s+Size[:\s]+([0-9.]+\s*[KMGT]B)', re.IGNORECASE),
+            (r'([0-9.]+\s*[KMGT]B)', 0)
+        ]
+        
+        text = soup.get_text()
+        for pattern, flags in size_patterns:
+            match = re.search(pattern, text, flags if flags else 0)
+            if match:
+                return match.group(1)
+        
+        return None
+    
+    def _extract_upload_date(self, soup: BeautifulSoup) -> Optional[str]:
+        """Extract upload date from the page."""
+        # Try to find upload date
+        date_selectors = [
+            ('span', {'class': 'upload-date'}),
+            ('div', {'class': 'upload-date'}),
+            ('time', {})
+        ]
+        
+        for tag, attrs in date_selectors:
+            element = soup.find(tag, attrs)
+            if element:
+                # Try datetime attribute first
+                if element.has_attr('datetime'):
+                    return element['datetime']
+                text = element.get_text(strip=True)
+                if text:
+                    return text
+        
+        return None
+    
+    def _extract_download_links(self, soup: BeautifulSoup, page_url: str) -> List[DownloadLink]:
+        """Extract all download links from the page."""
+        download_links = []
+        
+        # Find all links that look like download links
+        # Common patterns: buttons with "download", links with "download", direct file links
+        
+        # Strategy 1: Find download buttons/links
+        download_elements = soup.find_all(['a', 'button'], 
+                                          string=re.compile(r'download|Download|DOWNLOAD', re.IGNORECASE))
+        
+        for element in download_elements:
+            href = element.get('href')
+            if href:
+                # Make absolute URL
+                if href.startswith('http'):
+                    url = href
+                elif href.startswith('/'):
+                    url = f"{self.BASE_URL}{href}"
+                else:
+                    url = f"{self.BASE_URL}/{href}"
+                
+                # Try to extract quality info
+                quality = self._extract_quality(element.get_text())
+                
+                download_links.append(DownloadLink(
+                    url=url,
+                    quality=quality,
+                    source="viking"
+                ))
+        
+        # Strategy 2: Find all external file hosting links
+        all_links = soup.find_all('a', href=True)
+        
+        # Common file hosting domains
+        file_hosts = [
+            'drive.google.com', 'gdtot', 'hubcloud', 'filepress',
+            'pixeldrain', 'mediafire', 'mega.nz', 'dropbox',
+            'streamtape', 'doodstream', 'mixdrop', 'upstream'
+        ]
+        
+        for link in all_links:
+            href = link.get('href', '')
+            
+            # Check if it's a file hosting link
+            if any(host in href.lower() for host in file_hosts):
+                # Avoid duplicates
+                if not any(dl.url == href for dl in download_links):
+                    # Determine the source
+                    source = "viking"
+                    for host in file_hosts:
+                        if host in href.lower():
+                            source = host.replace('.com', '').replace('.nz', '')
+                            break
+                    
+                    download_links.append(DownloadLink(
+                        url=href,
+                        source=source
+                    ))
+        
+        # Strategy 3: Look for direct file links in the page
+        direct_file_patterns = [
+            r'https?://[^\s<>"]+\.(?:mp4|mkv|avi|mov|wmv|flv|webm|m3u8)',
+            r'https?://[^\s<>"]+/download/[^\s<>"]+',
+            r'https?://[^\s<>"]+/dl/[^\s<>"]+',
+        ]
+        
+        page_text = str(soup)
+        for pattern in direct_file_patterns:
+            matches = re.finditer(pattern, page_text, re.IGNORECASE)
+            for match in matches:
+                url = match.group(0).rstrip('"\'>')
+                if not any(dl.url == url for dl in download_links):
+                    # Try to extract quality from URL
+                    quality = None
+                    quality_match = re.search(r'(1080p|720p|480p|360p|4K|2K)', url, re.IGNORECASE)
+                    if quality_match:
+                        quality = quality_match.group(1)
+                    
+                    # Determine file type
+                    file_type = None
+                    ext_match = re.search(r'\.([a-z0-9]+)(?:\?|$)', url, re.IGNORECASE)
+                    if ext_match:
+                        file_type = ext_match.group(1)
+                    
+                    download_links.append(DownloadLink(
+                        url=url,
+                        quality=quality,
+                        source="direct",
+                        file_type=file_type
+                    ))
+        
+        return download_links
+    
+    def _extract_quality(self, text: str) -> Optional[str]:
+        """Extract quality information from text."""
+        quality_patterns = [
+            r'(1080p|720p|480p|360p|4K|2K|HD|SD|FHD|UHD)',
+        ]
+        
+        for pattern in quality_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        
+        return None
 
 
-# Example usage
+def main():
+    """Main function for CLI usage."""
+    parser = argparse.ArgumentParser(
+        description='Extract download links from viking file URLs',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s https://vik1ngfile.site/f/oDAbw3OOmy
+  %(prog)s https://vik1ngfile.site/f/oDAbw3OOmy --json
+  %(prog)s https://vik1ngfile.site/f/oDAbw3OOmy --output links.json
+        """
+    )
+    
+    parser.add_argument('url', help='Viking file URL to extract')
+    parser.add_argument('--json', action='store_true', help='Output in JSON format')
+    parser.add_argument('--output', '-o', help='Output file path (default: stdout)')
+    parser.add_argument('--timeout', type=int, default=30, help='Request timeout in seconds')
+    
+    args = parser.parse_args()
+    
+    try:
+        extractor = VikingFileExtractor(timeout=args.timeout)
+        viking_info = extractor.get_download_links(args.url)
+        
+        if args.json:
+            output = viking_info.to_json()
+        else:
+            # Human-readable format
+            output = []
+            output.append(f"Viking File: {viking_info.file_id}")
+            output.append(f"URL: {viking_info.page_url}")
+            
+            if viking_info.file_name:
+                output.append(f"File Name: {viking_info.file_name}")
+            if viking_info.file_size:
+                output.append(f"File Size: {viking_info.file_size}")
+            if viking_info.upload_date:
+                output.append(f"Upload Date: {viking_info.upload_date}")
+            
+            output.append(f"\nFound {len(viking_info.download_links)} download link(s):")
+            output.append("-" * 80)
+            
+            for i, link in enumerate(viking_info.download_links, 1):
+                output.append(f"\n{i}. Source: {link.source}")
+                if link.quality:
+                    output.append(f"   Quality: {link.quality}")
+                if link.file_size:
+                    output.append(f"   Size: {link.file_size}")
+                if link.file_type:
+                    output.append(f"   Type: {link.file_type}")
+                output.append(f"   URL: {link.url}")
+            
+            output = '\n'.join(output)
+        
+        if args.output:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                f.write(output)
+            print(f"Output saved to: {args.output}")
+        else:
+            print(output)
+        
+        # Exit with success
+        sys.exit(0)
+        
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    # Example: Create a sample OxxFile with viking link
-    sample_metadata = Metadata(
-        mime_type="video/mp4",
-        file_extension="mp4",
-        modified_time="2024-01-01T00:00:00Z",
-        created_time="2024-01-01T00:00:00Z",
-        pixeldrain_conversion_failed=False,
-        pixeldrain_conversion_failed_at="",
-        pixeldrain_conversion_error="",
-        viking_conversion_failed=False,
-        viking_conversion_failed_at=""
-    )
-    
-    sample_drive_link = DriveLink(
-        file_id="abc123",
-        web_view_link="https://drive.google.com/file/d/abc123/view",
-        drive_label="Primary Drive",
-        credential_index=0,
-        is_login_drive=False,
-        is_drive2=False
-    )
-    
-    sample_file = OxxFile(
-        id="file001",
-        code="XYZ123",
-        file_name="sample_video.mp4",
-        size=1048576000,  # 1GB in bytes
-        drive_links=[sample_drive_link],
-        metadata=sample_metadata,
-        created_at="2024-01-01T00:00:00Z",
-        views=100,
-        status="active",
-        gdtot_link="https://gdtot.example/file123",
-        gdtot_name="sample_video.mp4",
-        hubcloud_link="https://hubcloud.example/file123",
-        filepress_link="https://filepress.example/file123",
-        viking_link="https://viking.example/file123",
-        pixeldrain_link="https://pixeldrain.example/file123",
-        credential_index=0,
-        duration="01:30:00",
-        user_name="user123"
-    )
-    
-    print("=== Sample OxxFile with Viking Link ===")
-    print(sample_file.to_json())
-    
-    print("\n=== Viking Information ===")
-    viking_info = sample_file.get_viking_info()
-    for key, value in viking_info.items():
-        print(f"{key}: {value}")
-    
-    print("\n=== All Available Links ===")
-    all_links = sample_file.get_all_links()
-    for service, link in all_links.items():
-        print(f"{service}: {link}")
+    main()
